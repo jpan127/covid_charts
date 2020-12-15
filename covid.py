@@ -6,7 +6,11 @@ import datetime
 import json
 import statistics
 import time
+import math
 import numpy
+import pandas
+import click
+import seaborn
 from collections import defaultdict
 from pathlib import Path
 from pprint import pprint
@@ -27,11 +31,12 @@ class Statistics(Generic[T]):
     death: T = 0
     hospitalizedCurrently: T = 0
     inIcuCurrently: T = 0
-    positive: T = 0
+    # positive: T = 0
     positiveIncrease: T = 0
 
     @staticmethod
     def from_dict(d: Mapping[str, Any]) -> "Statistics[T]":
+        d = {k: v for k, v in d.items() if k in Statistics.fields()}
         obj = Statistics[T](**d)
         if isinstance(obj.date, int):
             obj.date = datetime.datetime(2020, 1, 1)
@@ -45,9 +50,10 @@ class Statistics(Generic[T]):
 
     @staticmethod
     def color(field: str) -> str:
-        COLORS = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+        # https://coolors.co/533a71-6184d8-50c5b7-9cec5b-e5c1bd-f4e952
+        COLORS = ["#533a71", "#6184d8", "#50c5b7", "#9cec5b", "#F4E952", "#E5C1BD"]
         COLOR_MAP = {
-            Statistics.fields()[i] : color for i, color in enumerate(COLORS)
+            field : color for field, color in zip(Statistics.fields(), COLORS)
         }
         return COLOR_MAP[field]
 
@@ -59,7 +65,7 @@ class AggregatedStatistics:
     death: List[int] = dataclasses.field(default_factory=list)
     hospitalizedCurrently: List[int] = dataclasses.field(default_factory=list)
     inIcuCurrently: List[int] = dataclasses.field(default_factory=list)
-    positive: List[int] = dataclasses.field(default_factory=list)
+    # positive: List[int] = dataclasses.field(default_factory=list)
     positiveIncrease: List[int] = dataclasses.field(default_factory=list)
 
     @staticmethod
@@ -195,9 +201,21 @@ def plot(aggregates: Mapping[Any, Any]) -> None:
             if not values:
                 continue
 
+            dates_as_nums = list(map(mdates.date2num, dates))
+            polynomial_functor = numpy.poly1d(numpy.polyfit(dates_as_nums, values, 1))
+            best_fit_ys = polynomial_functor(dates_as_nums)
             ax.plot(dates, values, marker='o', label=field, linewidth=5, color=Statistics.color(field))
+            ax.plot(dates, best_fit_ys, linestyle=':', linewidth=10, alpha=0.5, color=Statistics.color(field))
             for x, y in zip(dates, values):
                 ax.annotate(f"{y:,}", xy=(x, y + 1))
+            # Plot the slope of the best fit line
+            best_fit_slope = best_fit_ys[-1] - best_fit_ys[0]
+            factor_of_10 = math.log10(int(best_fit_ys[-1])) if best_fit_ys[-1] > 0.0 else 100
+            y_offset = pow(10, factor_of_10 - 1)
+            ax.text(dates[-1],
+                best_fit_ys[-1] + y_offset,
+                f"{best_fit_slope:,}",
+                bbox=dict(facecolor="none", edgecolor=Statistics.color(field)))
 
         for label in ax.get_xticklabels():
             label.set_rotation(40)
@@ -213,15 +231,18 @@ def plot(aggregates: Mapping[Any, Any]) -> None:
         loc="upper center")
     plt.show()
 
-async def main() -> None:
-    DAYS = 30
-    STATES = ["ca", "tx", "fl", "ny"]
-    CACHE_PATH = Path("covid_data.json")
-
-    with Cache(CACHE_PATH) as cache:
-        aggregates = await asyncio.gather(*[generate(cache, DAYS, state) for state in STATES])
+async def async_main(days: int, states: str, cache_path: str()) -> None:
+    with Cache(Path(cache_path)) as cache:
+        aggregates = await asyncio.gather(*[generate(cache, days, state) for state in states.split(" ")])
 
     plot(aggregates)
 
+@click.command()
+@click.option("--days", default=14, help="Number of days to look back in history")
+@click.option("--states", default="ca tx fl ny", help="Which states to look up")
+@click.option("--cache_path", default="covid_data.json", help="The path to the cache file to cache results")
+def main(days: int, states: str, cache_path: str) -> None:
+    asyncio.get_event_loop().run_until_complete(async_main(days, states, cache_path))
+
 if __name__ == "__main__":
-    asyncio.get_event_loop().run_until_complete(main())
+    main()
