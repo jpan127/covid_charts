@@ -1,16 +1,16 @@
 import math
 import numpy
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, List
 
 import matplotlib.pyplot as plt
 import matplotlib.units as munits
 import matplotlib.dates as mdates
 from matplotlib.cbook import flatten
 
-from covid_charts.data import Statistics, AggregatedStatistics
+from covid_charts.data import Statistics, AggregatedStatistics, DatesAndAggregatedStatistics
 
-def plot(aggregates: Mapping[Any, Any], image_path: Path) -> None:
+def plot(aggregates: List[DatesAndAggregatedStatistics], image_path: Path, show_plot: bool) -> None:
     _, axes = plt.subplots(2, 2)
     axes = list(flatten(axes))
     for i, (dates, (state, aggregate)) in enumerate(aggregates):
@@ -61,4 +61,6 @@ def plot(aggregates: Mapping[Any, Any], image_path: Path) -> None:
     if not image_path.exists():
         plt.gcf().set_size_inches(25.6, 14.4)
         plt.savefig(str(image_path), dpi=1000)
-    plt.show()
+
+    if show_plot:
+        plt.show()

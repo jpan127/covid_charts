@@ -4,6 +4,7 @@ import mimetypes
 import os.path
 import pickle
 from pathlib import Path
+from typing import Dict
 
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
@@ -12,9 +13,7 @@ from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build, Resource
 
-Client = Resource
-
-def login() -> Client:
+def login() -> Resource:
     creds = None
     # The file token.pickle stores the user's access and refresh tokens, and is
     # created automatically when the authorization flow completes for the first
@@ -37,7 +36,7 @@ def login() -> Client:
 
     return build('gmail', 'v1', credentials=creds)
 
-def send(gmail: Client, recipients: str, text: str, image_path: Path) -> None:
+def send(gmail: Resource, recipients: str, text: str, image_path: Path) -> None:
     html_text = "<font face='Courier New, Courier, monospace'><pre>" + text + "</pre></font>"
     html_text = html_text.replace("\n", "<br>")
     message = MIMEMultipart()
@@ -50,12 +49,12 @@ def send(gmail: Client, recipients: str, text: str, image_path: Path) -> None:
     if not content_type or content_type != "image/jpeg":
         raise RuntimeError(f"{image_path} is the wrong file type")
     with image_path.open("rb") as f:
-        msg = MIMEImage(f.read(), _sub_type = "jpeg")
+        msg = MIMEImage(f.read(), _sub_type="jpeg")
         msg.add_header("Content-Disposition", "attachment", filename=str(image_path))
     message.attach(msg)
 
-    message = {
+    body: Dict[str, str] = {
         "raw": base64.urlsafe_b64encode(message.as_string().encode("utf-8")).decode("utf-8")
     }
 
-    gmail.users().messages().send(userId="jpan127@gmail.com", body=message).execute()
+    gmail.users().messages().send(userId="jpan127@gmail.com", body=body).execute()
