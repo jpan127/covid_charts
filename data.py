@@ -15,7 +15,8 @@ import requests
 
 T = TypeVar("T", float, int)
 # @TODO: Change this into a dataclass
-DatesAndAggregatedStatistics = Tuple[List[datetime.datetime], Tuple[str, "AggregatedStatistics"]]
+DatesAndAggregatedStatistics = Tuple[List[datetime.date], Tuple[str, "AggregatedStatistics"]]
+invalid_datetime = datetime.date(3000, 1, 1)
 
 @dataclasses.dataclass
 class Statistics(Generic[T]):
@@ -26,7 +27,7 @@ class Statistics(Generic[T]):
     inIcuCurrently: T
     # positive: T
     positiveIncrease: T
-    date: datetime.datetime = datetime.datetime(2020, 1, 1)
+    date: datetime.date = invalid_datetime
 
     @staticmethod
     @overload
@@ -63,9 +64,9 @@ class Statistics(Generic[T]):
             raise TypeError("")
 
         if isinstance(obj.date, int):
-            obj.date = datetime.datetime(2020, 1, 1)
+            obj.date = invalid_datetime
         elif isinstance(obj.date, str):
-            obj.date = datetime.datetime.strptime(obj.date.split(" ")[0], "%Y-%m-%d")
+            obj.date = datetime.datetime.strptime(obj.date.split(" ")[0], "%Y-%m-%d").date()
         return obj
 
     @staticmethod
@@ -190,7 +191,7 @@ class Cache:
     def __exit__(self, *args) -> None:
         with self._path.open('w') as f:
             json.dump(self._cache, f, indent=4)
-        print(f"Cache misses : {float(self._misses) / self._loads}")
+        print(f"Cache misses : {0.0 if self._misses == 0 else float(self._misses) / self._loads}")
 
     def _fetch(self, state: State, construct: bool, county: Optional[str] = None) -> Dict[str, Any]:
         state_data = self._cache[str(state)]
@@ -200,7 +201,7 @@ class Cache:
             return state_data[str(county)]
         return state_data
 
-    def load(self, state: State, date: datetime.datetime, county: Optional[str] = None) -> "Optional[Statistics[int]]":
+    def load(self, state: State, date: datetime.date, county: Optional[str] = None) -> "Optional[Statistics[int]]":
         self._loads += 1
         try:
             return Statistics.from_dict(int, self._fetch(state, False, county)[str(date)])
@@ -209,7 +210,7 @@ class Cache:
             self._misses += 1
             return None
 
-    def store(self, state: State, date: datetime.datetime, data: Statistics[int], county: Optional[str] = None) -> None:
+    def store(self, state: State, date: datetime.date, data: Statistics[int], county: Optional[str] = None) -> None:
         self._fetch(state, True, county)[str(date)] = data.as_dict()
 
 def generate_metrics(aggregate: AggregatedStatistics) -> Metrics:
@@ -225,13 +226,13 @@ def generate_metrics(aggregate: AggregatedStatistics) -> Metrics:
         setattr(metrics.percent_delta, field, round((values[-1] - values[0]) / values[0], 4) * 100.0)
     return metrics
 
-def reverse_date_iterator(days: int) -> Generator[datetime.datetime, None, None]:
+def reverse_date_iterator(days: int) -> Generator[datetime.date, None, None]:
     ONE_DAY_DELTA = datetime.timedelta(1)
-    today = datetime.datetime.now()
+    today = datetime.datetime.now().date()
     for i in reversed(range(1, days + 1)):
         yield today - (ONE_DAY_DELTA * i)
 
-def aggregate_data(data: List[Statistics[int]]) -> Tuple[List[datetime.datetime], AggregatedStatistics]:
+def aggregate_data(data: List[Statistics[int]]) -> Tuple[List[datetime.date], AggregatedStatistics]:
     aggregate = AggregatedStatistics()
     for field in AggregatedStatistics.fields():
         setattr(aggregate, field, [getattr(stat, field) for stat in data])
@@ -254,20 +255,18 @@ class CovidTrackingProjectAPI:
                     print(f"Data doesn't seem correct for {url}: {data}")
                     sys.exit(1)
 
-    async def _get_by_date(self, month: int, day: int, state: str) -> Statistics[int]:
-        date = datetime.datetime(2020, month, day)
-
+    async def _get_by_date(self, date: datetime.date, state: str) -> Statistics[int]:
         maybe_cache_hit = self.cache.load(State(state), date)
         if maybe_cache_hit is not None:
             return maybe_cache_hit
-        queried_data = await self._get(f"2020{month}{'0' if day < 10 else ''}{day}", state)
+        queried_data = await self._get(date.strftime("%Y%m%d"), state)
         queried_data.date = date
         self.cache.store(State(state), date, queried_data)
         return queried_data
 
     async def _get_historical_data(self, days: int, state: str) -> List[Statistics[int]]:
         return await asyncio.gather(*(
-            self._get_by_date(date.month, date.day, state) for date in reverse_date_iterator(days)
+            self._get_by_date(date, state) for date in reverse_date_iterator(days)
         ))
 
     async def generate(self, days: int, state: str) -> DatesAndAggregatedStatistics:
@@ -287,7 +286,7 @@ class NewYorkTimesAPI:
             url: str,
             key_filter: str,
             value: str,
-            date: datetime.datetime,
+            date: datetime.date,
             state: str,
             county: Optional[str] = None) -> Statistics[int]:
         maybe_cache_hit = self.cache.load(State(state), date, county)
@@ -303,7 +302,7 @@ class NewYorkTimesAPI:
             raise ValueError(f"{url} did not have results for {key_filter} == {value}")
         date_and_cases: List[Tuple[str, str]] = sorted([(d["date"], d["cases"]) for d in data])
         for prior, current in zip(date_and_cases, date_and_cases[1:]):
-            current_date = datetime.datetime.strptime(current[0], "%Y-%m-%d")
+            current_date = datetime.datetime.strptime(current[0], "%Y-%m-%d").date()
             self.cache.store(
                 State(state),
                 current_date,
@@ -315,8 +314,7 @@ class NewYorkTimesAPI:
         assert maybe_cache_hit is not None
         return maybe_cache_hit
 
-    def county(self, month: int, day: int, state: str, county: str) -> Statistics[int]:
-        date = datetime.datetime(2020, month, day)
+    def county(self, date: datetime.date, state: str, county: str) -> Statistics[int]:
         data = self._get_by_date(
             "https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv",
             "county",
@@ -328,8 +326,7 @@ class NewYorkTimesAPI:
         print(data)
         return data
 
-    # def state(self, month: int, day: int, state: str) -> Statistics[int]:
-    #     date = datetime.datetime(2020, month, day)
+    # def state(self, date: datetime.date, state: str) -> Statistics[int]:
     #     data = self._get_by_date(
     #         url="https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-states.csv",
     #         key_filter="state",
@@ -342,7 +339,7 @@ class NewYorkTimesAPI:
 
     def _get_historical_data(self, days: int, state: str, county: str) -> List[Statistics[int]]:
         return [
-            self.county(date.month, date.day, state, county) for date in reverse_date_iterator(days)
+            self.county(date, state, county) for date in reverse_date_iterator(days)
         ]
 
     def generate(self, days: int, state: str, county: str) -> DatesAndAggregatedStatistics:
